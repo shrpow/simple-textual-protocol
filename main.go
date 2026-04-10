@@ -7,9 +7,9 @@ import (
 )
 
 type STPFrame struct {
+	Session string
 	Headers map[string][]string
 	Body    string
-	Session string
 }
 
 func (f *STPFrame) String() string {
@@ -21,12 +21,16 @@ func (f *STPFrame) String() string {
 	)
 }
 
-func ParseSTP(input string) (*STPFrame, error) {
+func ParseSTP(input, sessionID string) (*STPFrame, error) {
 	scanner := bufio.NewScanner(strings.NewReader(input))
-	frame := &STPFrame{Headers: make(map[string][]string)}
+	frame := &STPFrame{
+		Session: sessionID,
+		Headers: make(map[string][]string),
+	}
 	var bodyBuilder strings.Builder
 
-	inHeader, inBody := false, false
+	endMarker := "!expression:end:" + sessionID
+	inHeader, inBody, foundEnd := false, false, false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -58,14 +62,18 @@ func ParseSTP(input string) (*STPFrame, error) {
 		// 3. Accumulate Body until End Token
 		if inBody {
 			// Check length first to avoid panic, then compare the exact prefix
-			if len(line) >= 16 && line[:16] == "!expression:end:" {
-				frame.Session = line[16:]
+			if line == endMarker {
+				foundEnd = true
 				break
 			}
 
 			bodyBuilder.WriteString(line)
 			bodyBuilder.WriteString("\n")
 		}
+	}
+
+	if !foundEnd {
+		return nil, fmt.Errorf("incomplete frame: missing end marker %q", endMarker)
 	}
 
 	frame.Body = bodyBuilder.String()
@@ -75,22 +83,30 @@ func ParseSTP(input string) (*STPFrame, error) {
 func main() {
 	rawInput := `
 !expression
-@tool v1Python
-@tag item1
-@tag item2
+@tool python
+@tag 1
+@tag 2
 
-@decorator
-def some_func() -> int:
-    """
-    Everything here is a raw text.
-    Symbols like @ or ! are preserved as-is.
-    """
-    return 0
+def create_squares():
+    squares = []
+    for i in range(1, 6):
+        squares.append(i * i)
+    print(squares)
 
-!expression:end:TOKEN
+create_squares()
+
+!expression:end:
+
+!expression
+@tool test
+
+!expression:end:aXyYYZ
 	`
 
-	frame, _ := ParseSTP(rawInput)
+	frame, err := ParseSTP(rawInput, "aXyYYZ")
+	if err != nil {
+		panic(err)
+	}
 	fmt.Printf("Parsed: %+v\n", frame)
 	fmt.Print(frame.Body)
 }
